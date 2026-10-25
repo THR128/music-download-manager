@@ -1,0 +1,45 @@
+{
+  "platform": "netease",
+  "playlist": "8508302371",
+  "library_dir": "D:\\Music",
+  "client_download_dir": "D:\\CloudMusic",
+  "quality": "320",
+  "auto_move": true,
+  "fallback_platforms": [],
+  "schedule": {
+    "enabled": true,
+    "mode": "weekly",
+    "weekday": "sunday",
+    "time": "21:00",
+    "hours": 168,
+    "task_name": "MusicSync"
+  },
+  "notify": {
+    "toast": true,
+    "timeout": 40
+  },
+  "download": {
+    "ext": ".mp3",
+    "retries": 2,
+    "sleep": 0.3,
+    "overwrite": false
+  },
+  "ignore_ids": [],
+  "platforms": {
+    "netease": {
+      "cookie": "",
+      "client_app_dir": ""
+    },
+    "qqmusic": {
+      "cookie": "",
+      "uin": "",
+      "dfid": ""
+    },
+    "kugou": {
+      "cookie": ""
+    },
+    "soda": {
+      "cookie": ""
+    }
+  }
+}
