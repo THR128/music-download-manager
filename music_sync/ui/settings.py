@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """设置界面（tkinter，单窗口）。
 
 入口：``run(config_path=None) -> int``，也支持 ``python -m music_sync settings``。
@@ -40,7 +40,7 @@ log = get_logger()
 WINDOW_TITLE = "音乐下载自动化管理 · 设置"
 WINDOW_SIZE = "760x640"
 APP_NAME = "音乐下载自动化管理"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 FONT_UI = ("Microsoft YaHei UI", 9)
 FONT_TITLE = ("Microsoft YaHei UI", 10, "bold")
 FONT_HINT = ("Microsoft YaHei UI", 8)

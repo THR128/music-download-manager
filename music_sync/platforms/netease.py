@@ -1,18 +1,24 @@
 # -*- coding: utf-8 -*-
 """网易云音乐适配器。
 
-两条路取 cookie：
-1. 自动：从网易云客户端的内置 Chromium 里解密 cookie（客户端保持登录即可，用户零操作）；
+两条路取登录状态：
+1. 自动：从网易云客户端的内置浏览器数据里解出来（客户端保持登录即可，用户零操作）；
 2. 手动：配置里填 ``platforms.netease.cookie`` 字符串，覆盖自动结果。
 
-自动解密原理：客户端 ``LocalPrefs.json`` 的 ``os_crypt.encrypted_key`` 经 DPAPI 解出
-32 字节 AES 主密钥，再用 AES-GCM 解 Cookies 库里 ``v10`` 前缀的密文。
+自动解密原理随平台不同：
+
+* **Windows**：客户端 ``LocalPrefs.json`` 的 ``os_crypt.encrypted_key`` 经 DPAPI 解出
+  32 字节 AES 主密钥，再用 AES-GCM 解数据库里 ``v10`` 前缀的密文；
+* **macOS**：客户端是内置 CEF，数据目录换成 ``~/Library/Application Support/com.netease.163music``，
+  加密方式与 macOS 版 Chromium 一致（AES-128-CBC + 钥匙串密码），
+  但很多 CEF 应用根本不加密——所以顺序是「先试钥匙串，再当明文读」，
+  两条路都不通就返回空表，由上层给出"请在客户端里重新登录"的人话提示。
+
+所有平台相关的路径都从 :mod:`music_sync.ospaths` 拿，本模块不自己拼平台路径。
 """
 from __future__ import annotations
 
 import base64
-import ctypes
-import ctypes.wintypes
 import glob
 import json
 import os
@@ -20,16 +26,30 @@ import random
 import shutil
 import sqlite3
 import string
+import tempfile
 import time
 
 from .base import BaseAdapter, NotLoggedIn, PlatformError, Track, Unavailable
-from ..util import make_session
+from .. import ospaths
+from ..util import get_logger, make_session
 
 API = "https://music.163.com"
 LEVEL = {"lossless": "lossless", "320": "exhigh", "192": "higher", "128": "standard"}
 
+# macOS 上网易云客户端可能的钥匙串服务名，按可能性从高到低试
+_MAC_SAFE_STORAGE_SERVICES = (
+    "NeteaseMusic Safe Storage",
+    "NetEase Music Safe Storage",
+    "网易云音乐 Safe Storage",
+    "Chrome Safe Storage",
+)
+
 
 def _dpapi_unprotect(data: bytes) -> bytes:
+    # 只 import 在函数里：ctypes.wintypes 在 macOS/Linux 上根本 import 不了
+    import ctypes
+    import ctypes.wintypes
+
     class BLOB(ctypes.Structure):
         _fields_ = [("cbData", ctypes.wintypes.DWORD),
                     ("pbData", ctypes.POINTER(ctypes.c_char))]
@@ -45,17 +65,61 @@ def _dpapi_unprotect(data: bytes) -> bytes:
 
 
 def find_client_dir() -> str:
-    """找到网易云客户端的 Chromium 数据目录（webappXXXX）。"""
-    base = os.path.join(os.environ.get("LOCALAPPDATA", ""), "NetEase", "CloudMusic")
-    if not os.path.isdir(base):
-        return ""
-    cands = [p for p in glob.glob(os.path.join(base, "webapp*")) if os.path.isdir(p)]
-    cands.sort(key=os.path.getmtime, reverse=True)
-    return cands[0] if cands else ""
+    """找到网易云客户端内置浏览器的数据目录。
+
+    * Windows：``%LOCALAPPDATA%\\NetEase\\CloudMusic\\webapp*``（挑最新的那个）；
+    * macOS：``com.netease.163music`` 的两处容器目录，只认里面真有数据库的那个；
+    * 找不到返回空串，让调用方走"请手动指定"的降级分支。
+    """
+    for path in ospaths.netease_client_dirs():
+        if not os.path.isdir(path):
+            continue
+        if "webapp" in os.path.basename(path).lower():
+            return path
+        # macOS 的候选里有 .app 本体，它没有数据库，跳过
+        if not ospaths.IS_MAC or _cookie_db_in(path):
+            return path
+    return ""
+
+
+def _cookie_db_in(client_dir: str) -> str:
+    """在客户端数据目录里找登录状态数据库，找不到返回空串。"""
+    for rel in ("Cookies", os.path.join("Network", "Cookies")):
+        path = os.path.join(client_dir, rel)
+        if os.path.isfile(path):
+            return path
+    try:
+        for path in glob.glob(os.path.join(client_dir, "**", "Cookies"), recursive=True):
+            if os.path.isfile(path):
+                return path
+    except OSError:
+        pass
+    return ""
+
+
+def _open_cookie_db(src: str) -> sqlite3.Connection:
+    """复制一份再打开（客户端正在跑的时候原库可能被锁）。"""
+    tmp_dir = os.path.join(tempfile.gettempdir(), "music-sync-cookies")
+    try:
+        os.makedirs(tmp_dir, exist_ok=True)
+        tmp = os.path.join(tmp_dir, "Cookies")
+        shutil.copy2(src, tmp)
+        return sqlite3.connect(tmp)
+    except Exception:
+        return sqlite3.connect(f"file:{src}?mode=ro", uri=True)
 
 
 def decrypt_client_cookies(client_dir: str) -> dict[str, str]:
-    """从客户端 Cookie 库解出 .music.163.com 的 cookie。"""
+    """从客户端的数据目录里取出 music.163.com 的登录状态（公开 API，签名不变）。"""
+    if ospaths.IS_MAC:
+        return _decrypt_client_mac(client_dir)
+    if not ospaths.IS_WIN:
+        return _decrypt_client_plain(client_dir)
+    return _decrypt_client_windows(client_dir)
+
+
+def _decrypt_client_windows(client_dir: str) -> dict[str, str]:
+    """Windows：LocalPrefs.json + DPAPI 主密钥 + AES-GCM。"""
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     prefs_path = os.path.join(client_dir, "LocalPrefs.json")
@@ -69,16 +133,7 @@ def decrypt_client_cookies(client_dir: str) -> dict[str, str]:
     src = os.path.join(client_dir, "Cookies")
     if not os.path.isfile(src):
         raise PlatformError(f"找不到 {src}")
-    tmp_dir = os.path.join(os.environ.get("TEMP", "."), "music-sync-cookies")
-    os.makedirs(tmp_dir, exist_ok=True)
-    tmp = os.path.join(tmp_dir, "Cookies")
-    con = None
-    try:
-        shutil.copy2(src, tmp)
-        con = sqlite3.connect(tmp)
-    except Exception:
-        con = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
-
+    con = _open_cookie_db(src)
     jar: dict[str, str] = {}
     try:
         rows = con.execute("SELECT host_key,name,encrypted_value,value FROM cookies")
@@ -97,11 +152,90 @@ def decrypt_client_cookies(client_dir: str) -> dict[str, str]:
                 jar[name] = value
     finally:
         con.close()
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+        _cleanup_temp_db()
     return jar
+
+
+def _decrypt_client_mac(client_dir: str) -> dict[str, str]:
+    """macOS：先试钥匙串（CEF 里可能复用 Chromium 的加密），再当明文读。"""
+    src = _cookie_db_in(client_dir)
+    if not src:
+        return {}                       # 没数据库 = 还没登录过，交给上层提示
+
+    key = None
+    try:
+        from ..browser_cookies import _mac_key
+        for service in _MAC_SAFE_STORAGE_SERVICES:
+            key = _mac_key(service)
+            if key:
+                break
+    except Exception as exc:            # noqa: BLE001 - 钥匙串任何问题都只是读不到
+        get_logger().debug("macOS 客户端取钥匙串失败（当明文读）: %s", exc)
+        key = None
+
+    con = _open_cookie_db(src)
+    jar: dict[str, str] = {}
+    try:
+        rows = con.execute("SELECT host_key,name,encrypted_value,value FROM cookies")
+        for host, name, enc, plain in rows:
+            if "music.163.com" not in (host or ""):
+                continue
+            value = plain or ""
+            if not value and enc:
+                value = _decrypt_mac_value(enc, key)
+            if value:
+                jar[name] = value
+    except Exception:
+        jar = {}
+    finally:
+        con.close()
+        _cleanup_temp_db()
+    return jar
+
+
+def _decrypt_mac_value(enc: bytes, key: bytes | None) -> str:
+    """单个密文字段：先按 Chromium(CBC) 解，失败就按明文读。"""
+    from ..browser_cookies import _decrypt_mac
+
+    value = _decrypt_mac(enc, key)
+    if value:
+        return value
+    try:
+        text = enc.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+    return text if text.isprintable() else ""
+
+
+def _decrypt_client_plain(client_dir: str) -> dict[str, str]:
+    """非 Windows/macOS（例如 Linux）：只读明文，读不到就给空表。"""
+    src = _cookie_db_in(client_dir)
+    if not src:
+        return {}
+    con = _open_cookie_db(src)
+    jar: dict[str, str] = {}
+    try:
+        rows = con.execute("SELECT host_key,name,encrypted_value,value FROM cookies")
+        for host, name, enc, plain in rows:
+            if "music.163.com" not in (host or ""):
+                continue
+            value = plain or (enc or b"").decode("utf-8", "ignore")
+            if value:
+                jar[name] = value
+    except Exception:
+        jar = {}
+    finally:
+        con.close()
+        _cleanup_temp_db()
+    return jar
+
+
+def _cleanup_temp_db() -> None:
+    tmp = os.path.join(tempfile.gettempdir(), "music-sync-cookies", "Cookies")
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
 
 
 class NeteaseAdapter(BaseAdapter):

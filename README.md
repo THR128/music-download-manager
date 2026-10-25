@@ -1,6 +1,6 @@
-# 音乐下载自动化管理
+﻿# 音乐下载自动化管理
 
-把音乐平台「我喜欢」里的歌，定时补齐到本地曲库的 Windows 小工具。
+把音乐平台「我喜欢」里的歌，定时补齐到本地曲库的小工具（Windows / macOS）。
 
 仓库名 `music-download-manager`，Python 包名 `music_sync`（沿用旧名，不改 import）。
 不联网上传、不碰你的账号密码，只是拿你自己已登录的会话去读歌单、下歌。
@@ -12,14 +12,14 @@
 - **对账补缺**：拉你歌单里的曲目，和本地曲库比一遍，缺哪首下哪首，已有的直接跳过。
 - **多平台**：网易云音乐、QQ音乐、酷狗音乐可以下载；汽水音乐只有占位适配器（见「已知限制」）。
 - **少手动**：网易云直接用客户端本地的登录态；QQ音乐/酷狗可以一键读浏览器里已经登录的状态，实在不行才手动粘。
-- **定时跑**：注册 Windows 计划任务，每周固定一天 / 每天 / 每隔 N 小时跑一次；跑完右下角弹一个小窗告诉你下了几首。
+- **定时跑**：注册系统定时任务（Windows 计划任务 / macOS launchd），每周固定一天 / 每天 / 每隔 N 小时跑一次；跑完右下角弹一个小窗告诉你下了几首。
 - **跨平台补源**：主平台没版权或者下不动的歌，只要能换源，会用其它已登录平台的同名曲补上。
 - **归置文件**：客户端（网易云/QQ音乐）自己下载的歌，默认放在它们的下载目录里，可以自动搬进你的曲库。
 - **能自检**：一条命令查依赖、目录、网络、登录态、计划任务有没有装好。
 
 ## 环境要求
 
-- Windows 10 / 11（只支持 Windows，脚本和计划任务都基于 Windows）
+- **Windows 10 / 11** 或 **macOS 12 及以上**（Intel / Apple Silicon 都行）
 - Python 3.9 或更高（开发和测试用的是 3.13）
 - 能联网，装依赖时需要网络
 
@@ -29,10 +29,10 @@
 
 ### 1. 装依赖
 
-```bat
+```bash
 cd music-sync
-python -m venv .venv
-.venv\Scripts\activate
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
@@ -40,7 +40,7 @@ pip install -r requirements.txt
 
 ### 2. 打开设置，填一遍
 
-```bat
+```bash
 python -m music_sync settings
 ```
 
@@ -54,7 +54,7 @@ python -m music_sync settings
 
 ### 3. 注册计划任务
 
-设置界面的「计划任务名称」要和脚本的 `-TaskName` 一致，然后用脚本注册（推荐）：
+**Windows**：设置界面的「计划任务名称」要和脚本的 `-TaskName` 一致，然后用脚本注册（推荐）：
 
 ```powershell
 # 每周日 21:00
@@ -67,18 +67,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_task.ps1 -Da
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_task.ps1 -Hours 24
 ```
 
-嫌 PowerShell 麻烦的话，命令行入口也包了一层：
+**macOS**：同一个命令换个脚本名，背后是 `launchd` 的 LaunchAgent（装在 `~/Library/LaunchAgents`，不用 sudo）：
 
-```bat
+```bash
+chmod +x scripts/install_task.sh
+./scripts/install_task.sh --weekly --weekday 7 --time 21:00   # 每周日 21:00（周一=1 … 周日=7）
+./scripts/install_task.sh --daily --time 21:00
+./scripts/install_task.sh --hours 24
+./scripts/install_task.sh --remove        # 取消定时
+```
+
+嫌脚本麻烦的话，命令行入口两边通用：
+
+```bash
 python -m music_sync task --weekly --weekday Sunday --time 21:00
 ```
 
 脚本是幂等的（先删再建），改时间就再跑一次。想先看看会下什么、但不下：
 
-```bat
+```bash
 python -m music_sync sync --dry-run
-python -m music_sync check        :: 环境自检
-python -m music_sync platforms    :: 列出平台和登录态
+python -m music_sync check        # 环境自检（Windows 上写作 :: 也行）
+python -m music_sync platforms    # 列出平台和登录态
 ```
 
 ## 每个平台怎么登录
@@ -129,7 +139,7 @@ python -m music_sync login netease    :: 只取网易云（会自动写入配置
 | `weekday` | `"sunday"` | `weekly` 时用，`monday`…`sunday` |
 | `time` | `"21:00"` | `weekly`/`daily` 时用，24 小时制 `HH:MM` |
 | `hours` | `168` | `mode=hours` 时的间隔小时数，1~8760 |
-| `task_name` | `"MusicSync"` | 计划任务名，要和 `install_task.ps1 -TaskName` 一致 |
+| `task_name` | `"MusicSync"` | 定时任务名，要和 `install_task.ps1 -TaskName` / `install_task.sh --task-name` 一致 |
 
 ### `notify`（跑完的提示窗）
 
@@ -174,23 +184,29 @@ python -m music_sync login netease    :: 只取网易云（会自动写入配置
 **Q：计划任务到点了没反应？**
 先看任务有没有跑过：`schtasks /Query /TN MusicSync /V /FO LIST`。注意任务的「工作目录」必须是项目根目录——用 `scripts\install_task.ps1` 注册就自动设好了，手动在任务计划程序里建容易漏。电脑当时在睡眠/关机也没关系，勾了「错过就开始」会在下次开机后补跑。
 
+**Q：macOS 上定时任务到点了没反应？**
+`launchctl print gui/$(id -u)/com.thr128.music-sync.<任务名>` 看状态，日志在 `~/Library/Logs/music-sync/`。注意 macOS 的 launchd 在睡眠期间错过的触发**不会补跑**（这点和 Windows 不一样），长时间合盖的话建议改用「每隔 N 小时」模式。
+
+**Q：macOS 上「自动获取」拿不到浏览器登录态？**
+macOS 把浏览器数据放在受保护目录，命令行进程默认读不到。第一次会弹权限框，允许就行；没弹的话去「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里把终端（或运行它的程序）打开。也可以干脆用网易云客户端登录——那条路不需要额外权限。
+
 **Q：QQ音乐/酷狗一直显示未登录？**
 这两个平台靠浏览器会话。先在 Chrome/Edge 里登录对应网页版，回到设置窗口点「自动获取」。浏览器用的是别的账号或者开了无痕窗口，工具就读不到。
 
 ## 卸载
 
-```powershell
-# 1. 删计划任务
+```bash
+# Windows
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_task.ps1 -TaskName MusicSync -Remove
 
-# 2. 删程序目录
-#    直接把 music-sync 文件夹删掉（如果建了 .venv 也一起删）
-
-# 3. 删配置和日志（可选，想重来就先删它）
-#    删掉 C:\Users\<你的用户名>\.music-sync 整个文件夹
+# macOS
+./scripts/install_task.sh --remove
+# 或手动：launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.thr128.music-sync.*.plist
 ```
 
-没有注册表项、没有开机自启、没有服务，删完就干净了。
+然后把 `music-sync` 文件夹删掉（建过 `.venv` 就一起删）。配置和日志在 `~/.music-sync`（Windows）或 `~/Library/Application Support/music-sync`（macOS），想重来就先删它们。
+
+没有注册表项、没有开机自启、没有常驻服务，删完就干净了。
 
 ## 已知限制
 
@@ -198,7 +214,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_task.ps1 -Ta
 
 - **汽水音乐只有占位适配器**，不能登录、不能下载，只占个平台位。选它当主平台会直接报错。
 - **QQ音乐 / 酷狗音乐的下载接口没有在真机账号上验证过**。代码是按公开接口写的，能跑通对账和登录检测，但真正下单/取地址的环节可能因为对方接口改动而失效，出问题请以日志为准。
-- 只支持 **Windows**（依赖 Windows 计划任务、DPAPI 解密、`pythonw.exe`）。
+- **macOS 支持是 1.1.0 新增的**，在 Windows 上完成开发和自测，macOS 侧的关键环节（钥匙串取密钥、launchd 注册、Safari 读取、完全磁盘访问权限）**尚未在真机验证**。用自检命令 `python -m music_sync check` 会逐项告诉你哪里没通。
+- Linux 能跑对账和下载，但定时任务暂不支持（给的理由和替代做法：自己挂 cron）。
 - 歌单里需要会员才能听的歌，没有会员账号就是下不到，这不是 bug。
 - 请只用来管理**你自己账号**的歌单，别拿去做批量分发或商业用途。
 
@@ -212,15 +229,21 @@ music-sync/
 │  ├─ matching.py         歌名对账
 │  ├─ sync.py             同步主流程
 │  ├─ login.py            登录态获取（客户端 → 浏览器 → 配置）
-│  ├─ browser_cookies.py  读 Chrome/Edge 等浏览器的 cookie 库
+│  ├─ browser_cookies.py  读 Chrome/Edge/Safari 等浏览器的登录数据（Windows/macOS）
+│  ├─ ospaths.py          平台差异出口（路径、浏览器配置目录、客户端位置）
+│  ├─ schedule.py         定时任务（Windows 计划任务 / macOS launchd）
 │  ├─ selfcheck.py        环境自检
 │  ├─ cli.py / __main__.py  命令行入口
 │  └─ ui/                 设置界面、结果提示窗
 ├─ scripts/
-│  └─ install_task.ps1    注册/更新/删除计划任务
+│  ├─ install_task.ps1    注册/更新/删除计划任务（Windows）
+│  └─ install_task.sh     注册/更新/删除定时任务（macOS）
 ├─ docs/
-│  └─ devlog-entry.md     发布说明稿
-├─ requirements.txt
+│  ├─ devlog-entry.md     发布说明稿
+│  └─ settings.png        设置界面截图
+├─ tests/                 单元测试（pip install -r requirements-dev.txt && python -m pytest tests）
+├─ requirements.txt       运行依赖
+├─ requirements-dev.txt   测试依赖（pytest）
 └─ LICENSE
 ```
 

@@ -6,7 +6,7 @@ tag: 项目
 
 # MusicSync：把「我喜欢」的歌自动补齐到本地
 
-一个跑在 Windows 上的小工具：定时读你在音乐平台的歌单，跟本地曲库比一遍，缺哪首补哪首。
+一个小工具：定时读你在音乐平台的歌单，跟本地曲库比一遍，缺哪首补哪首。Windows 和 macOS 都能跑。
 
 ## 为什么做这个东西
 
@@ -18,8 +18,8 @@ tag: 项目
 
 - 读歌单、对账、补缺，已有的直接跳过
 - 三个平台可选做主来源，主平台没有版权的歌可以换源补
-- 不用手填 cookie：网易云直接读客户端本地登录态，其它平台读浏览器里已经登录过的状态
-- 注册 Windows 计划任务，每周 / 每天 / 每隔 N 小时跑一次；跑完右下角弹个小窗汇报结果
+- 不用填任何凭证：网易云直接读客户端本地登录态，其它平台读浏览器里已经登录过的状态，一键就好
+- 注册系统定时任务（Windows 计划任务 / macOS launchd），每周 / 每天 / 每隔 N 小时跑一次；跑完右下角弹个小窗汇报结果
 - 自动把网易云、QQ音乐客户端里的下载成品归到曲库目录
 - 一条命令自检：依赖、目录、网络、登录态、计划任务，哪里缺了都会说
 
@@ -27,7 +27,7 @@ tag: 项目
 
 （占位：GitHub Releases 页面和安装说明补齐后替换。）
 
-大致三步：装 Python 依赖 → 跑 `python -m music_sync settings` 填一遍 → 用 `scripts/install_task.ps1` 注册计划任务。README 里有完整步骤和每个平台拿登录态的办法。
+大致三步：装好运行环境 → 跑 `python -m music_sync settings` 填一遍 → 用 `scripts/install_task.ps1`（Windows）或 `scripts/install_task.sh`（macOS）注册定时任务。README 里有完整步骤和每个平台拿登录态的办法。
 
 ## 几个值得说的实现
 
@@ -39,7 +39,18 @@ tag: 项目
 
 **跨终端自检。** `python -m music_sync check` 把所有「我这里能跑、换台机器就炸」的东西挨个查一遍：Python 版本、依赖能不能 import、曲库目录能不能写、配置里有没有残留的占位值、各平台登录态、计划任务装没装。每项给 `ok / warn / fail` 和一句人话说明。这条命令的用处是省掉「你那边报什么错」这个来回。
 
+**把 Windows 的东西抽出来，才有 macOS。** 1.1.0 最大的工作量不是写新功能，是把原来散在各个文件里的平台假设集中到一处（`ospaths.py`）：配置目录、默认曲库、浏览器数据目录、客户端安装位置，全部按平台分支，别的模块只问它。定时任务同理，抽出 `schedule.py`，对外只有 `install / uninstall / run_now / status` 四个动作，Windows 走 `schtasks`、macOS 走 `launchd`，命令行和自检都用同一份。这样加平台是改一个文件，而不是满仓库找 `sys.platform`。
+
+**macOS 上的登录态是另一套机制。** Windows 读浏览器的登录数据是 DPAPI + AES-GCM；macOS 的密钥在钥匙串里（`security find-generic-password` 取出来做 PBKDF2，1003 轮，再 AES-128-CBC 解）。两套解密逻辑分开写、按平台分发，Windows 那条路径一行没动——这是硬要求，因为它已经在真机上跑了几个月。macOS 多支持了一个 Safari（`Cookies.binarycookies` 二进制格式），虽然它需要「完全磁盘访问权限」，但聊胜于无。
+
 ## 更新日志
+
+### v1.1.0 — 2026-10-25
+
+- 新增 macOS 支持：登录态读取（钥匙串 + AES-CBC、Safari 二进制格式）、网易云 mac 客户端读取、`launchd` 定时任务（`scripts/install_task.sh`）
+- 新增 `ospaths.py` 统一平台差异、`schedule.py` 统一定时任务，命令行与自检在三个系统上都能给出对应答案
+- 自检按平台给检查项，macOS 增加钥匙串命令、浏览器目录可读性、`/Applications` 客户端、launchd 注册状态
+- 测试从 38 个涨到 113 个，覆盖平台分支与两套解密算法
 
 ### v1.0.0 — 2026-10-25
 
@@ -55,7 +66,7 @@ tag: 项目
 
 - 汽水音乐只有占位适配器，不能登录、不能下载，只占个平台位。
 - QQ音乐和酷狗的下载接口我没有在真机账号上完整验证过，是按公开接口写的，接口一变就可能失效。
-- 只支持 Windows，毕竟依赖计划任务、DPAPI 和 `pythonw.exe`。
+- macOS 支持是 1.1.0 刚加的，Windows 侧是主力开发环境，macOS 侧的关键环节还没在真机跑满，用 `python -m music_sync check` 会逐项告诉你哪里没通。
 - 只用来管理自己账号的歌单。
 
 代码不复杂，总共几千行，`music_sync/` 下面按模块拆开了，想改哪个平台直接照 `netease.py` 抄一份就行。

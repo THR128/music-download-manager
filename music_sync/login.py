@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""登录态获取（面向"不懂 cookie 是什么"的普通用户）。
+"""登录态获取（面向第一次用这类工具的普通用户）。
 
 优先级：
 1. 平台官方客户端已经登录过 → 直接复用它的登录态（网易云）；
-2. 浏览器里登录过该平台网页 → 从浏览器的 cookie 里复用；
-3. 用户手动填过 cookie → 用配置里的。
+2. 浏览器里登录过该平台网页 → 从浏览器保存的登录信息里复用；
+3. 用户手动填过 → 用配置里的。
 
 对外只暴露三个函数：``status`` / ``auto`` / ``report``，GUI 和 CLI 共用。
-所有提示文案都是中文人话，不出现 cookie 术语。
+所有提示文案都是中文人话，不用任何内部术语。
 """
 from __future__ import annotations
 
@@ -30,7 +30,14 @@ CLIENT_HINTS = {
 
 
 def client_installed(platform: str) -> bool:
-    return any(os.path.exists(p) for p in CLIENT_HINTS.get(platform, []))
+    # macOS：按 /Applications 里的 .app 判断
+    try:
+        from . import ospaths
+        if ospaths.IS_MAC:
+            return platform in ospaths.mac_installed_apps()
+    except Exception:  # noqa: BLE001 - 平台判断失败就当没装
+        pass
+    return any(os.path.exists(p) for p in CLIENT_HINTS.get(platform, []) or [])
 
 
 def _netease_client_cookies() -> dict[str, str]:

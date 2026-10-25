@@ -101,25 +101,30 @@ def cmd_platforms(args) -> int:
 
 
 def cmd_task(args) -> int:
-    """把计划任务交给 PowerShell 脚本处理，保持单一实现。"""
+    """注册 / 删除 / 立即运行计划任务；Windows 用 schtasks，macOS 用 launchd。
+
+    具体实现都在 :mod:`music_sync.schedule` 里，这里只负责选动作和打印结果。
+    """
     cfg = _load(args)
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    script = os.path.join(root, "scripts", "install_task.ps1")
-    if not os.path.isfile(script):
-        print(f"找不到脚本：{script}", file=sys.stderr)
-        return 1
-    params = ["-Config", cfgmod.config_path(getattr(args, "config", None))]
+    from . import schedule
+
+    name = (getattr(args, "task_name", None)
+            or (cfg.get("schedule") or {}).get("task_name") or "MusicSync")
+    config_path = cfgmod.config_path(getattr(args, "config", None))
     if args.remove:
-        params.append("-Remove")
-    elif args.hours:
-        params += ["-Hours", str(args.hours)]
-    elif args.daily:
-        params += ["-Daily", "-Time", args.time or "21:00"]
-    elif args.weekly:
-        params += ["-Weekly", "-Weekday", args.weekday or "Sunday", "-Time", args.time or "21:00"]
-    params += ["-TaskName", (cfg.get("schedule") or {}).get("task_name", "MusicSync")]
-    cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script] + params
-    return subprocess.call(cmd)
+        ok, message = schedule.uninstall(task_name=name)
+    elif getattr(args, "run_now", False):
+        ok, message = schedule.run_now(task_name=name)
+    else:
+        ok, message = schedule.install(
+            cfg, config_path,
+            weekly=args.weekly, weekday=args.weekday, time=args.time,
+            daily=args.daily, hours=args.hours, task_name=name)
+    if message:
+        # Windows 下 install_task.ps1 自己会打印详细步骤，成功时 message 为空，
+        # 这里就不会多出一行——保持原来的输出。
+        print(("✅ " if ok else "❌ ") + message)
+    return 0 if ok else 1
 
 
 def cmd_login(args) -> int:
@@ -167,13 +172,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_pl = sub.add_parser("platforms", help="列出平台与登录态")
     p_pl.set_defaults(func=cmd_platforms)
 
-    p_task = sub.add_parser("task", help="注册/更新 Windows 计划任务")
+    p_task = sub.add_parser("task", help="注册/更新计划任务（Windows 用 schtasks，macOS 用 launchd）")
     p_task.add_argument("--weekly", action="store_true", help="每周执行")
     p_task.add_argument("--daily", action="store_true", help="每天执行")
     p_task.add_argument("--hours", type=int, help="每隔 N 小时执行")
     p_task.add_argument("--weekday", help="周几（Monday..Sunday）")
     p_task.add_argument("--time", help="时间 HH:MM")
     p_task.add_argument("--remove", action="store_true", help="删除计划任务")
+    p_task.add_argument("--run-now", action="store_true", help="立即运行一次已注册的任务")
+    p_task.add_argument("--task-name", help="任务名（默认读配置里的 schedule.task_name）")
     p_task.set_defaults(func=cmd_task)
     return parser
 

@@ -59,11 +59,14 @@ def check_deps(items: list[Check]) -> None:
 
 
 def check_system(items: list[Check]) -> None:
-    if os.name != "nt":
-        _add(items, "操作系统", WARN, f"{platform.system()}"
-                                       "：本工具的计划任务/客户端 cookie 解密仅支持 Windows")
-    else:
+    if os.name == "nt":
         _add(items, "操作系统", OK, f"{platform.system()} {platform.release()} {platform.version()}")
+    elif sys.platform == "darwin":
+        version = platform.mac_ver()[0] or platform.release()
+        _add(items, "操作系统", OK, f"macOS {version}")
+    else:
+        _add(items, "操作系统", WARN, f"{platform.system()}"
+                                       "：计划任务暂不支持，可自行用 cron 调 `python -m music_sync sync`")
     _add(items, "文件名编码", OK if sys.getfilesystemencoding().lower() in ("utf-8", "utf8")
          else WARN, sys.getfilesystemencoding())
 
@@ -112,6 +115,10 @@ def check_config(items: list[Check], cfg: dict, path: str) -> None:
 
 
 def check_clients(items: list[Check]) -> None:
+    if os.name != "nt":
+        if sys.platform == "darwin":
+            check_clients_macos(items)
+        return
     local = os.environ.get("LOCALAPPDATA", "")
     known = {
         "网易云音乐": [os.path.join(local, "NetEase", "CloudMusic")],
@@ -124,6 +131,30 @@ def check_clients(items: list[Check]) -> None:
             _add(items, f"客户端 {name}", OK, hit)
         else:
             _add(items, f"客户端 {name}", WARN, "未安装（只影响自动取 cookie，不影响手填 cookie）")
+
+
+def check_clients_macos(items: list[Check]) -> None:
+    """macOS 的客户端都是 /Applications 下的 .app 包。"""
+    known = {
+        "网易云音乐": ["NeteaseMusic.app", "网易云音乐.app"],
+        "QQ音乐": ["QQMusic.app", "QQ音乐.app"],
+        "酷狗音乐": ["KuGou.app", "酷狗音乐.app"],
+    }
+    roots = ["/Applications", os.path.expanduser("~/Applications")]
+    for name, apps in known.items():
+        hit = ""
+        for root in roots:
+            for app in apps:
+                path = os.path.join(root, app)
+                if os.path.isdir(path):
+                    hit = path
+                    break
+            if hit:
+                break
+        if hit:
+            _add(items, f"客户端 {name}", OK, hit)
+        else:
+            _add(items, f"客户端 {name}", WARN, "未安装（只影响自动获取登录态，不影响手填）")
 
 
 def check_network(items: list[Check]) -> None:
@@ -157,24 +188,60 @@ def check_platforms(items: list[Check], cfg: dict) -> None:
 
 
 def check_task(items: list[Check], cfg: dict) -> None:
-    if os.name != "nt":
-        return
+    """计划任务检查：Windows 查 schtasks，macOS 查 launchd，Linux 给 cron 提示。"""
+    from . import schedule
+
     name = (cfg.get("schedule") or {}).get("task_name", "MusicSync")
+    state = schedule.status(name)
+    if state.get("installed"):
+        _add(items, "计划任务", OK, state.get("detail") or f"{name} 已注册")
+    else:
+        _add(items, "计划任务", WARN,
+             state.get("detail") or f"没有名为 {name} 的任务")
+
+
+def _browser_profiles() -> list[tuple[str, str]]:
+    """拿浏览器配置目录。
+
+    优先用同事正在写的 ``ospaths.browser_profiles``；还没落地时退回
+    ``browser_cookies.chromium_profiles``（Windows 上两者等价）。
+    """
     try:
-        proc = subprocess.run(["schtasks", "/Query", "/TN", name],
-                              capture_output=True, text=True, timeout=15,
-                              encoding="gbk", errors="ignore")
-    except (OSError, subprocess.SubprocessError) as exc:
-        _add(items, "计划任务", WARN, f"查询失败：{exc}")
+        from .ospaths import browser_profiles as profiles_func
+    except ImportError:
+        from .browser_cookies import chromium_profiles as profiles_func
+    try:
+        raw = profiles_func() or []
+    except Exception:                             # noqa: BLE001 - 自检不能被读目录搞崩
+        return []
+    out: list[tuple[str, str]] = []
+    for item in raw:
+        if isinstance(item, (tuple, list)) and len(item) >= 2:
+            out.append((str(item[0]), str(item[1])))
+        else:
+            path = str(item)
+            out.append((os.path.basename(path) or path, path))
+    return out
+
+
+def check_macos(items: list[Check]) -> None:
+    """macOS 专有检查项：读浏览器登录态要用的 security 命令、配置目录可读性。"""
+    security = shutil.which("security")
+    if security:
+        _add(items, "security 命令", OK, security)
+    else:
+        _add(items, "security 命令", WARN, "没找到 security 命令（自动读取浏览器登录态会失败）")
+
+    profiles = _browser_profiles()
+    if not profiles:
+        _add(items, "浏览器配置目录", WARN, "没找到浏览器配置目录（只影响自动读取登录态）")
         return
-    if proc.returncode != 0:
-        _add(items, "计划任务", WARN, f"没有名为 {name} 的任务（可用 scripts/install_task.ps1 注册）")
-        return
-    next_run = ""
-    for line in proc.stdout.splitlines():
-        if "Next Run Time" in line or "下次运行时间" in line:
-            next_run = line.split(":", 1)[-1].strip()
-    _add(items, "计划任务", OK, f"{name} 已注册" + (f"，下次 {next_run}" if next_run else ""))
+    readable = [path for _, path in profiles if os.access(path, os.R_OK)]
+    names = "、".join(name for name, _ in profiles[:4])
+    if readable:
+        _add(items, "浏览器配置目录", OK, f"找到 {len(profiles)} 个，{len(readable)} 个可读（{names}）")
+    else:
+        _add(items, "浏览器配置目录", WARN, f"找到 {len(profiles)} 个但都不可读（{names}）")
 
 
 def check_gui(items: list[Check]) -> None:
@@ -212,6 +279,8 @@ def run_checks(cfg: dict | None = None, path: str | None = None) -> list[Check]:
     check_system(items)
     check_config(items, cfg, path)
     check_clients(items)
+    if sys.platform == "darwin":
+        check_macos(items)
     check_network(items)
     check_platforms(items, cfg)
     check_task(items, cfg)

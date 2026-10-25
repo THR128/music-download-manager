@@ -1,0 +1,2 @@
+# 跑测试才需要（程序本身只需要 requirements.txt 里的两个包）
+pytest>=7.0
