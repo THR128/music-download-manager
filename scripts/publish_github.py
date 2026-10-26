@@ -27,7 +27,7 @@ import urllib.request
 API = "https://api.github.com"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "build", "dist", "pylibs"}
+SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "build", "dist", "pylibs", ".pytest_cache", ".idea"}
 SKIP_FILES = {"config.json", "last_result.json"}
 SKIP_EXT = {".pyc", ".pyo", ".log", ".part", ".zip", ".exe"}
 SKIP_SUFFIX = (".log.1", ".egg-info")
@@ -37,6 +37,15 @@ DEFAULT_DESC = (
     "支持定时检查、多平台换源、音质选择与结果提示窗。"
 )
 DEFAULT_TOPICS = ["music", "netease", "qqmusic", "kugou", "mp3", "windows", "tkinter", "python"]
+
+
+def _version() -> str:
+    sys.path.insert(0, ROOT)
+    try:
+        from music_sync import __version__
+        return __version__
+    except Exception:
+        return "dev"
 
 
 def _opener():
@@ -99,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--description", default=DEFAULT_DESC)
     parser.add_argument("--private", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="只打印将要上传的文件")
+    parser.add_argument("--message", default="", help="提交说明（默认带版本号）")
     args = parser.parse_args(argv)
 
     files = collect_files()
@@ -183,14 +193,14 @@ def main(argv: list[str] | None = None) -> int:
             base_tree = commit["tree"]["sha"]
 
     tree_payload = {"tree": tree_items}
-    if base_tree:
-        tree_payload["base_tree"] = base_tree
+    # 刻意不传 base_tree：远端 tree 与本地文件列表完全一致，
+    # 这样本地已删除的文件（比如误传的缓存目录）会随提交一起清掉。
     status, tree = _request("POST", "/repos/%s/%s/git/trees" % (owner, args.repo), token, tree_payload)
     if status not in (200, 201):
         print("建 tree 失败：%s" % tree.get("message"), file=sys.stderr)
         return 1
 
-    message = "音乐下载自动化管理 v1.0.0：多平台歌单同步、定时任务、设置界面与自检"
+    message = args.message or ("音乐下载自动化管理 v%s" % _version())
     commit_payload = {"message": message, "tree": tree["sha"]}
     if parent_sha:
         commit_payload["parents"] = [parent_sha]
@@ -217,3 +227,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
