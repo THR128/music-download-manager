@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import abc
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -55,9 +56,21 @@ class BaseAdapter(abc.ABC):
     supports_download: bool = True
     #: 音质档位 -> 平台内部的等级名，由各适配器自行解释
     quality_levels: tuple[str, ...] = ("320", "192", "128")
+    #: 各平台「默认收藏」歌单的常见叫法：留空时按这些名字去找
+    LIKED_ALIASES: tuple[str, ...] = (
+        "我喜欢", "我喜欢的音乐", "喜欢的音乐", "我的喜欢", "我最喜欢",
+        "我的收藏", "默认收藏", "收藏夹", "喜欢的歌曲", "我喜欢的歌",
+    )
+    #: 可以直接当成「自动识别」的写法
+    AUTO_WORDS: frozenset[str] = frozenset({
+        "", "auto", "自动", "自动识别", "默认", "default", "liked", "like",
+        "favorite", "favorites",
+    })
 
     def __init__(self, config: dict | None = None):
         self.config = config or {}
+        #: 最近一次解析出的歌单名（自动识别时由平台返回，供日志/提示窗显示）
+        self.last_playlist_name: str = ""
 
     # ------------------------- 会话 -------------------------
     def check_login(self) -> tuple[bool, str]:
@@ -75,7 +88,40 @@ class BaseAdapter(abc.ABC):
     # ------------------------- 歌单 -------------------------
     @abc.abstractmethod
     def list_tracks(self, playlist: str) -> list[Track]:
-        """拉取歌单全部曲目。playlist 可以是 id、URL 或本地歌单名。"""
+        """拉取歌单全部曲目。playlist 可以是 id、URL 或歌单名（含「我喜欢」这类别名）。"""
+
+    @classmethod
+    def is_auto_playlist(cls, playlist: str | None) -> bool:
+        """判断这个歌单标识是不是「留空 / auto / 我喜欢」这类自动识别写法。"""
+        text = (playlist or "").strip().lower()
+        if text in cls.AUTO_WORDS:
+            return True
+        squeezed = re.sub(r"[\s_\-·。.]+", "", text)
+        if squeezed in cls.AUTO_WORDS:
+            return True
+        if squeezed.endswith("歌单") and squeezed[:-2] in cls.AUTO_WORDS:
+            return True
+        return any(alias in text for alias in cls.LIKED_ALIASES)
+
+    def find_default_playlist(self) -> tuple[str, str]:
+        """找当前账号的「默认收藏（我喜欢）」歌单，返回 ``(歌单 id, 歌单名)``。
+
+        找不到就抛 :class:`PlatformError`，让上层提示用户手动填歌单。
+        """
+        raise PlatformError(
+            f"{self.title} 还不能自动识别「我喜欢」，请在设置里填歌单 id 或歌单链接")
+
+    def resolve_playlist(self, playlist: str | None) -> tuple[str, str]:
+        """把配置里的歌单标识解析成 ``(可以直接拉取的 id, 展示用歌单名)``。
+
+        留空或写「我喜欢」这类别名时，转调 :meth:`find_default_playlist`。
+        """
+        if self.is_auto_playlist(playlist):
+            pid, name = self.find_default_playlist()
+            self.last_playlist_name = name or self.last_playlist_name
+            return pid, name
+        text = (playlist or "").strip()
+        return text, ""
 
     # ------------------------- 下载 -------------------------
     def download(self, track: Track, dest_dir: str, quality: str = "320") -> str:

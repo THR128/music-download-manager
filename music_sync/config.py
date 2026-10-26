@@ -39,10 +39,10 @@ DEFAULT_CONFIG: dict = {
     },
     "ignore_ids": [],
     "platforms": {
-        "netease": {"cookie": "", "client_app_dir": ""},
-        "qqmusic": {"cookie": ""},
-        "kugou": {"cookie": ""},
-        "soda": {"cookie": ""},
+        "netease": {"cookie": "", "client_app_dir": "", "playlist": ""},
+        "qqmusic": {"cookie": "", "playlist": ""},
+        "kugou": {"cookie": "", "playlist": ""},
+        "soda": {"cookie": "", "playlist": ""},
     },
 }
 
@@ -108,3 +108,25 @@ def ensure_exists(path: str | None = None) -> str:
     if not os.path.isfile(target):
         save(copy.deepcopy(DEFAULT_CONFIG), target)
     return target
+
+
+# ------------------------- 各平台歌单 -------------------------
+def platform_playlist(cfg: dict, platform: str) -> str:
+    """取某个平台的歌单标识。
+
+    优先级：``platforms.<平台>.playlist`` > 旧的全局 ``playlist``。
+    都为空时返回空串，交给对应适配器自动识别「我喜欢」。
+    """
+    entry = ((cfg or {}).get("platforms") or {}).get(platform) or {}
+    value = str(entry.get("playlist") or "").strip()
+    if value:
+        return value
+    return str((cfg or {}).get("playlist") or "").strip()
+
+
+def set_platform_playlist(cfg: dict, platform: str, value: str) -> dict:
+    """把歌单标识写到 ``platforms.<平台>.playlist``（空串 = 自动识别）。"""
+    platforms = cfg.setdefault("platforms", {})
+    entry = platforms.setdefault(platform, {})
+    entry["playlist"] = (value or "").strip()
+    return cfg

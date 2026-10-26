@@ -348,10 +348,37 @@ class QQMusicAdapter(BaseAdapter):
         raise PlatformError(f"QQ音乐接口请求失败：{last_error}")
 
     # ------------------------- 歌单 -------------------------
+    def find_default_playlist(self) -> tuple[str, str]:
+        """QQ音乐的「我喜欢」是每个账号固定的 disstid=201，先验证能拉到再认。"""
+        self.ensure_login()
+        candidates = ("201", "202")
+        last_error = ""
+        for pid in candidates:
+            try:
+                tracks = self._list_by_id(pid)
+            except PlatformError as exc:
+                last_error = str(exc)
+                continue
+            if tracks:
+                name = "我喜欢" if pid == "201" else "默认收藏"
+                return pid, name
+        raise PlatformError(
+            "没法自动识别 QQ 音乐的「我喜欢」"
+            + (f"：{last_error}" if last_error else "")
+            + "。请在设置里填歌单 id 或歌单链接")
+
     def list_tracks(self, playlist: str) -> list[Track]:
         """拉歌单：先走 fcg 歌单接口，失败再走 musicu 的 dissinfo，最后按 songmid 补歌名。"""
         self.ensure_login()
-        pid = parse_playlist_id(playlist)
+        pid, name = self.resolve_playlist(playlist)
+        pid = parse_playlist_id(pid)
+        self.last_playlist_name = name or self.last_playlist_name
+        tracks = self._list_by_id(pid)
+        self._fill_songinfo(tracks)
+        return tracks
+
+    def _list_by_id(self, pid: str) -> list[Track]:
+        """按歌单 id 拉曲目（不带补歌名，find_default_playlist 复用）。"""
         tracks: list[Track] = []
 
         params = {
@@ -383,7 +410,6 @@ class QQMusicAdapter(BaseAdapter):
 
         if not tracks:
             raise PlatformError("QQ音乐歌单拉取失败：cookie 可能过期，或歌单不是公开歌单")
-        self._fill_songinfo(tracks)
         return tracks
 
     def _fill_songinfo(self, tracks: list[Track]) -> None:

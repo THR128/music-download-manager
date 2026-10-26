@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """设置界面（tkinter，单窗口）。
 
 入口：``run(config_path=None) -> int``，也支持 ``python -m music_sync settings``。
@@ -38,9 +38,9 @@ log = get_logger()
 # ---------------------------------------------------------------- 常量
 
 WINDOW_TITLE = "音乐下载自动化管理 · 设置"
-WINDOW_SIZE = "760x640"
+WINDOW_SIZE = "760x840"
 APP_NAME = "音乐下载自动化管理"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 FONT_UI = ("Microsoft YaHei UI", 9)
 FONT_TITLE = ("Microsoft YaHei UI", 10, "bold")
 FONT_HINT = ("Microsoft YaHei UI", 8)
@@ -81,6 +81,10 @@ LOGINABLE = {"netease", "qqmusic", "kugou"}
 
 TIME_RE = re.compile(r"^([01]?\d|2[0-3])[:：]([0-5]?\d)$")
 
+#: 每个平台自己的歌单字段（空字符串 = 自动识别该账号的「我喜欢」）
+PLAYLIST_HINT = ("留空 = 自动识别该账号的「我喜欢」（「歌单（默认）」填了值时，留空就用这个默认值）；"
+                 "也可以填歌单 id 或整条歌单链接。")
+
 
 # ---------------------------------------------------------------- 工具函数
 
@@ -113,6 +117,16 @@ def pythonw_path() -> str:
     return exe
 
 
+def initial_geometry(root) -> str:
+    """按目标尺寸开窗；屏幕太矮时（比如 1366x768）自动收一收，别让窗口露出屏幕外。"""
+    width, height = (int(part) for part in WINDOW_SIZE.split("x"))
+    try:
+        max_height = int(root.winfo_screenheight()) - 90
+    except tk.TclError:                                   # pragma: no cover - 无头环境
+        max_height = height
+    return f"{width}x{max(560, min(height, max_height))}"
+
+
 def normalize_time(text: str) -> str | None:
     """把 ``21:0`` / ``9：30`` 规整成 ``21:00`` / ``09:30``；不合法返回 None。"""
     match = TIME_RE.match((text or "").strip())
@@ -142,6 +156,28 @@ def clip_text(text: str, cells: int = 34) -> str:
         out.append(char)
         used += width
     return "".join(out)
+
+
+def platform_playlist_of(cfg: dict, platform_key: str) -> str:
+    """读某个平台**自己填的**歌单（不套全局兜底）。
+
+    设置界面要能看出「这一行是不是留空」，所以不能直接用 ``config.platform_playlist``
+    ——它会回落成全局 ``playlist``，界面上就分不出「自己填的」和「用默认的」了。
+    """
+    return str((((cfg or {}).get("platforms") or {}).get(platform_key) or {}).get("playlist") or "")
+
+
+def set_platform_playlist_of(cfg: dict, platform_key: str, value: str) -> None:
+    """写某个平台的歌单到 ``cfg["platforms"][key]["playlist"]``（不改配置结构）。"""
+    setter = getattr(config_mod, "set_platform_playlist", None)
+    if callable(setter):
+        try:
+            setter(cfg, platform_key, value)
+            return
+        except Exception as exc:                          # noqa: BLE001 - 旧版配置模块没有这个函数
+            log.debug("set_platform_playlist 写入失败，回落到本地逻辑：%s", exc)
+    platforms = cfg.setdefault("platforms", {})
+    platforms.setdefault(platform_key, {})["playlist"] = str(value or "")
 
 
 # ---------------------------------------------------------------- 主窗口
@@ -220,8 +256,8 @@ class SettingsApp:
 
         self.root = tk.Tk()
         self.root.title(WINDOW_TITLE)
-        self.root.geometry(WINDOW_SIZE)
-        self.root.minsize(720, 580)
+        self.root.geometry(initial_geometry(self.root))
+        self.root.minsize(720, 640)
         self._setup_style()
 
         self._make_vars()
@@ -252,6 +288,8 @@ class SettingsApp:
     def _make_vars(self) -> None:
         self.var_platform = tk.StringVar()
         self.var_playlist = tk.StringVar()
+        #: 每个平台各自的歌单（key -> StringVar），空字符串 = 自动识别「我喜欢」
+        self.var_platform_playlist = {key: tk.StringVar() for key in PLATFORMS}
         self.var_library = tk.StringVar()
         self.var_client = tk.StringVar()
         self.var_quality = tk.StringVar()        # 存中文标签，方便 Combobox 直接显示
@@ -280,8 +318,9 @@ class SettingsApp:
         body.columnconfigure(0, weight=1)
 
         self._build_basic(body).grid(row=0, column=0, sticky="ew")
-        self._build_schedule(body).grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        self._build_login(body).grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        self._build_platform_playlists(body).grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        self._build_schedule(body).grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        self._build_login(body).grid(row=3, column=0, sticky="ew", pady=(6, 0))
 
     def _build_basic(self, parent) -> ttk.LabelFrame:
         frame = ttk.LabelFrame(parent, text="基本设置", padding=(10, 3))
@@ -297,8 +336,8 @@ class SettingsApp:
         ttk.Label(frame, text="只同步这个平台的歌单", style="Hint.TLabel").grid(
             row=0, column=2, sticky="w", padx=(8, 0))
 
-        # 歌单
-        ttk.Label(frame, text="歌单").grid(row=1, column=0, sticky="w", pady=2)
+        # 歌单（默认）：各平台没填时的兜底
+        ttk.Label(frame, text="歌单（默认）").grid(row=1, column=0, sticky="w", pady=2)
         entry_playlist = ttk.Entry(frame, textvariable=self.var_playlist)
         entry_playlist.grid(row=1, column=1, sticky="ew", pady=2)
         ttk.Button(frame, text="说明", width=6, command=self._show_playlist_help).grid(
@@ -333,6 +372,31 @@ class SettingsApp:
         # 灰字提醒（无损不支持 / 平台不可下载都写这一行，平时留空占位）
         self.lbl_hint = ttk.Label(frame, text="", style="Hint.TLabel")
         self.lbl_hint.grid(row=5, column=1, columnspan=2, sticky="w", pady=(0, 2))
+
+        ttk.Label(frame, text="「歌单（默认）」只作为各平台没填时的兜底值。",
+                  style="Hint.TLabel").grid(
+            row=6, column=1, columnspan=2, sticky="w", pady=(0, 2))
+        return frame
+
+    def _build_platform_playlists(self, parent) -> ttk.LabelFrame:
+        """各平台歌单：每个平台一行，留空 = 自动识别该账号的「我喜欢」。"""
+        frame = ttk.LabelFrame(parent, text="各平台歌单", padding=(10, 3))
+        frame.columnconfigure(1, weight=1)
+
+        for index, (key, (title, downloadable)) in enumerate(PLATFORMS.items()):
+            ttk.Label(frame, text=title, width=11, anchor="w").grid(
+                row=index, column=0, sticky="w", pady=1)
+            # 汽水没有公开接口：输入框与说明按钮一起置灰
+            state = "normal" if downloadable else "disabled"
+            entry = ttk.Entry(frame, textvariable=self.var_platform_playlist[key],
+                              state=state, width=44)
+            entry.grid(row=index, column=1, sticky="ew", pady=1, padx=(4, 8))
+            ttk.Button(frame, text="说明", width=6, state=state,
+                       command=lambda k=key: self._show_platform_playlist_help(k)).grid(
+                row=index, column=2, sticky="e", pady=1)
+
+        ttk.Label(frame, text=PLAYLIST_HINT, style="Hint.TLabel").grid(
+            row=len(PLATFORMS), column=0, columnspan=3, sticky="w", pady=(3, 0))
         return frame
 
     def _build_schedule(self, parent) -> ttk.LabelFrame:
@@ -439,6 +503,8 @@ class SettingsApp:
         platform_key = str(cfg.get("platform") or "netease")
         self.var_platform.set(PLATFORM_LABELS.get(platform_key, platform_key))
         self.var_playlist.set(str(cfg.get("playlist") or ""))
+        for key in PLATFORMS:
+            self.var_platform_playlist[key].set(platform_playlist_of(cfg, key))
         self.var_library.set(str(cfg.get("library_dir") or ""))
         self.var_client.set(str(cfg.get("client_download_dir") or ""))
         quality = str(cfg.get("quality") or "320")
@@ -520,9 +586,26 @@ class SettingsApp:
     def _show_playlist_help(self) -> None:
         messagebox.showinfo(
             "歌单怎么填",
+            "这个「歌单（默认）」是兜底值：哪个平台下面没单独填歌单，就用这里的。\n\n"
             "两种写法都行：\n"
             "  1. 歌单 id：网页版歌单地址里 id= 后面那串数字；\n"
             "  2. 歌单链接：整条 https://music.163.com/#/playlist?id=xxxx 直接粘贴。\n\n"
+            "注意：只能同步当前登录账号能访问的歌单，私密歌单必须先登录。",
+            parent=self.root)
+
+    def _show_platform_playlist_help(self, key: str) -> None:
+        """单个平台的填法说明：写清楚留空 = 按名字自动找「我喜欢」。"""
+        title = PLATFORM_LABELS.get(key, key)
+        messagebox.showinfo(
+            f"{title}的歌单怎么填",
+            f"这一行只作用于{title}，其它平台互不影响。\n\n"
+            "可以填：\n"
+            "  1. 歌单 id：网页版歌单地址里 id= 后面那串数字；\n"
+            "  2. 歌单链接：整条歌单地址直接粘贴。\n\n"
+            "留空（推荐）：工具会在你的账号里按名字自动找默认收藏歌单，\n"
+            "常见叫法有「我喜欢」「我喜欢的音乐」「喜欢的音乐」「我的收藏」；\n"
+            "自动识别不到时，再回来手动填歌单 id 或链接。\n\n"
+            "（「歌单（默认）」里填了值时，这一行留空就先用那个默认值。）\n\n"
             "注意：只能同步当前登录账号能访问的歌单，私密歌单必须先登录。",
             parent=self.root)
 
@@ -709,6 +792,9 @@ class SettingsApp:
         new = copy.deepcopy(self.cfg)                   # 保留 ignore_ids / download 等未在界面里的字段
         new["platform"] = self._current_platform_key()
         new["playlist"] = playlist
+        # 各平台自己的歌单：空字符串表示「自动识别该账号的我喜欢」
+        for key in PLATFORMS:
+            set_platform_playlist_of(new, key, self.var_platform_playlist[key].get().strip())
         new["library_dir"] = config_mod.expand(library)
         new["client_download_dir"] = config_mod.expand(client) if client else ""
         new["quality"] = quality

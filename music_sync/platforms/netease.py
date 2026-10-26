@@ -284,12 +284,46 @@ class NeteaseAdapter(BaseAdapter):
         return self._session
 
     # ---------------- 歌单 ----------------
+    def uid(self) -> str:
+        """当前登录账号的 uid（拿不到返回空串）。"""
+        try:
+            data = self.session.get(f"{API}/api/nuser/account/get", timeout=15).json() or {}
+        except Exception:
+            return ""
+        profile = data.get("profile") or data.get("account") or {}
+        return str(profile.get("userId") or profile.get("id") or "")
+
+    def find_default_playlist(self) -> tuple[str, str]:
+        """在「我的歌单」里找默认收藏：优先 specialType == 5，退化按名字匹配。"""
+        self.ensure_login()
+        uid = self.uid()
+        if not uid:
+            raise PlatformError("拿不到网易云账号信息，没法自动识别「我喜欢」，请在设置里填歌单 id")
+        try:
+            data = self.session.get(
+                f"{API}/api/user/playlist",
+                params={"uid": uid, "limit": 1000, "offset": 0}, timeout=25).json() or {}
+        except Exception as exc:
+            raise PlatformError(f"拉取「我的歌单」失败：{exc}") from exc
+        items = data.get("playlist") or []
+        for item in items:                     # 网易云的「我喜欢」就是 specialType=5
+            if item.get("specialType") == 5:
+                return str(item.get("id")), item.get("name") or "我喜欢的音乐"
+        for item in items:
+            name = (item.get("name") or "")
+            if any(alias in name for alias in self.LIKED_ALIASES):
+                return str(item.get("id")), name
+        raise PlatformError("在你的网易云歌单里没找到「我喜欢」，请在设置里手动填歌单 id")
+
     def list_tracks(self, playlist: str) -> list[Track]:
         self.ensure_login()
-        pid = self._parse_playlist_id(playlist)
+        pid, name = self.resolve_playlist(playlist)
+        pid = self._parse_playlist_id(pid)
+        self.last_playlist_name = name or self.last_playlist_name
         resp = self.session.get(f"{API}/api/v6/playlist/detail",
                                 params={"id": pid, "n": 1000}, timeout=25)
         playlist_obj = (resp.json() or {}).get("playlist") or {}
+        self.last_playlist_name = self.last_playlist_name or (playlist_obj.get("name") or "")
         ids = [t["id"] for t in (playlist_obj.get("trackIds") or playlist_obj.get("tracks") or [])]
         if not ids:
             raise PlatformError("歌单拉取失败：cookie 可能过期，或歌单不是自己的")

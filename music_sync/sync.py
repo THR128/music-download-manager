@@ -24,6 +24,7 @@ class SyncResult:
     time: str = ""
     platform: str = ""
     playlist: int = 0
+    playlist_name: str = ""
     files: int = 0
     matched: int = 0
     new: list[str] = field(default_factory=list)
@@ -160,7 +161,8 @@ def run(cfg: dict, dry_run: bool = False) -> SyncResult:
         if not ok:
             result.error = f"{adapter.title} 未登录：{message}"
             return result
-        tracks = adapter.list_tracks(cfg.get("playlist") or "")
+        playlist = cfgmod.platform_playlist(cfg, key)
+        tracks = adapter.list_tracks(playlist)
     except NotLoggedIn as exc:
         result.error = f"{adapter.title} 登录态失效：{exc}"
         return result
@@ -168,7 +170,11 @@ def run(cfg: dict, dry_run: bool = False) -> SyncResult:
         result.error = f"{adapter.title} 拉歌单失败：{exc}"
         return result
 
-    log.info("歌单：%s 首（%s）", len(tracks), adapter.title)
+    name = getattr(adapter, "last_playlist_name", "") or ""
+    if not name:
+        name = "自动识别" if adapter.is_auto_playlist(playlist) else str(playlist)
+    result.playlist_name = name
+    log.info("歌单「%s」：%s 首（%s）", name, len(tracks), adapter.title)
     files = matching.scan_library(library)
     report = matching.match(tracks, files, ignore_ids={str(x) for x in cfg.get("ignore_ids") or []})
     result.playlist, result.files, result.matched = len(tracks), len(files), report.matched_count

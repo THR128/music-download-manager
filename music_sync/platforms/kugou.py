@@ -36,6 +36,7 @@ SEARCH_API_V2 = "https://songsearch.kugou.com/song_search_v2"
 SEARCH_API_HTTP = "http://mobilecdn.kugou.com/api/v3/search/song"
 #: 老 CDN 直链接口：key = md5(hash + "kgcloudv2")
 CDN_API = "http://trackercdn.kugou.com/i/v2/"
+USER_PLAYLIST_API = "http://mobilecdn.kugou.com/api/v3/user/playlist"
 REFERER = "https://www.kugou.com/"
 
 TIMEOUT_API = 20
@@ -291,6 +292,15 @@ class KugouAdapter(BaseAdapter):
         if not jar:
             raise NotLoggedIn("酷狗音乐还没登录：先用浏览器打开 kugou.com 登录一次，再在设置里点「自动获取」")
 
+    def userid(self) -> str:
+        """当前登录账号的 userid（cookie 里的 userid / kugouid，拿不到返回空串）。"""
+        jar = self.cookies()
+        for key in ("userid", "kugouid", "UserId", "KugooID"):
+            value = (jar.get(key) or "").strip()
+            if value.isdigit():
+                return value
+        return ""
+
     @property
     def session(self):
         if self._session is None:
@@ -320,10 +330,39 @@ class KugouAdapter(BaseAdapter):
         raise PlatformError(f"酷狗接口请求失败：{last_error}")
 
     # ------------------------- 歌单 -------------------------
+    def find_default_playlist(self) -> tuple[str, str]:
+        """酷狗网页版「我喜欢」是账号下的特殊歌单（specialid）。
+
+        先问账号歌单列表接口找名字像「我喜欢」的那条；接口不可用时给出手动填写提示。
+        注意：这部分链路没在真机验证过，拿不到就明确让用户手填。
+        """
+        self.ensure_login()
+        userid = self.userid()
+        if userid:
+            try:
+                data = self._request_json(
+                    USER_PLAYLIST_API,
+                    params={"userid": userid, "page": "1", "pagesize": "200",
+                            "type": "0", "plat": "0"})
+                items = (((data.get("data") or {}).get("info")) or [])
+                for item in items:
+                    name = str(item.get("name") or item.get("specialname") or "")
+                    if any(alias in name for alias in self.LIKED_ALIASES):
+                        sid = item.get("specialid") or item.get("listid") or item.get("id")
+                        if sid:
+                            return str(sid), name
+            except PlatformError as exc:
+                get_logger().debug("酷狗账号歌单列表不可用：%s", exc)
+        raise PlatformError(
+            "酷狗没法自动识别「我喜欢」：浏览器里拿到的酷狗登录凭证只有令牌，拿不到账号 id，"
+            "列不出你的歌单。请在设置里填酷狗歌单 id 或歌单链接")
+
     def list_tracks(self, playlist: str) -> list[Track]:
         """拉歌单：先手机版 plist，再试 wwwapi playlist。"""
         self.ensure_login()
-        sid = parse_playlist_id(playlist)
+        sid, name = self.resolve_playlist(playlist)
+        sid = parse_playlist_id(sid)
+        self.last_playlist_name = name or self.last_playlist_name
         tracks: list[Track] = []
 
         try:

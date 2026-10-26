@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """MusicSync —— 多平台音乐歌单自动补齐工具。
 
 模块地图：
@@ -9,5 +9,5 @@
 - ``selfcheck``  跨终端环境自检
 - ``ui``         设置界面与右下角提示窗
 """
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __all__ = ["__version__"]

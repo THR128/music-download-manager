@@ -161,8 +161,10 @@ def details(parent, result: dict) -> None:
     top.pack(fill="x")
     tk.Label(top, text="本次同步明细", bg=BG, fg=FG,
              font=tkfont.Font(family=FONT, size=12, weight="bold"), anchor="w").pack(fill="x")
-    tk.Label(top, text="%s  ·  歌单 %s 首 / 本地文件 %s 个 / 匹配 %s 对" % (
-        result.get("time", ""), result.get("playlist", "-"),
+    pname = str(result.get("playlist_name") or "").strip()
+    ptext = "歌单「%s」%s 首" % (pname, result.get("playlist", "-")) if pname else "歌单 %s 首" % result.get("playlist", "-")
+    tk.Label(top, text="%s  ·  %s / 本地文件 %s 个 / 匹配 %s 对" % (
+        result.get("time", ""), ptext,
         result.get("files", "-"), result.get("matched", "-")),
         bg=BG, fg=DIM, font=f_s, anchor="w").pack(fill="x", pady=(4, 0))
 

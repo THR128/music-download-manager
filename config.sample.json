@@ -28,18 +28,22 @@
   "platforms": {
     "netease": {
       "cookie": "",
-      "client_app_dir": ""
+      "client_app_dir": "",
+      "playlist": ""
     },
     "qqmusic": {
       "cookie": "",
       "uin": "",
-      "dfid": ""
+      "dfid": "",
+      "playlist": ""
     },
     "kugou": {
-      "cookie": ""
+      "cookie": "",
+      "playlist": ""
     },
     "soda": {
-      "cookie": ""
+      "cookie": "",
+      "playlist": ""
     }
   }
 }
