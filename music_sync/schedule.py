@@ -287,6 +287,9 @@ def _call_ps1(params: list[str], *, capture: bool = False) -> tuple[int, str]:
 def _install_windows(config_path: str | None, task_name: str, *, weekly: bool, weekday,
                      time, daily: bool, hours) -> tuple[bool, str]:
     params = ["-Config", cfgmod.config_path(config_path)]
+    # 用「正在跑命令的」这个解释器，别让 ps1 去 PATH 里猜一个不认识 music_sync 的
+    if sys.executable and os.path.isfile(sys.executable):
+        params += ["-Python", sys.executable]
     # 顺序与原来的 cli.py 完全一致：--hours > --daily > --weekly；
     # 三个都不给时交给 ps1 读配置文件里的 mode。
     if hours:
