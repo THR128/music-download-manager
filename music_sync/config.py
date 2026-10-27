@@ -38,6 +38,11 @@ DEFAULT_CONFIG: dict = {
         "overwrite": False,
     },
     "ignore_ids": [],
+    "unlock": {
+        "enabled": True,          # 自动解锁客户端下载的加密音频（.ncm / .qmc* / .kgm …）
+        "scan_library": False,    # 除客户端下载目录外，也扫曲库目录里的加密文件
+        "remove_source": False,   # 解锁成功后删掉原加密文件
+    },
     "platforms": {
         "netease": {"cookie": "", "client_app_dir": "", "playlist": ""},
         "qqmusic": {"cookie": "", "playlist": ""},

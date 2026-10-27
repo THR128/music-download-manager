@@ -31,6 +31,10 @@ class SyncResult:
     moved: list[str] = field(default_factory=list)
     grey: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
+    unlocked: list[str] = field(default_factory=list)
+    unlock_failed: list[str] = field(default_factory=list)
+    unlock_hint: list[str] = field(default_factory=list)
+    hint: str = ""
     error: str = ""
 
     @property
@@ -78,6 +82,81 @@ def move_client_downloads(cfg: dict, result: SyncResult, dry_run: bool = False) 
             log.info("归置：%s", name)
         except OSError as exc:
             log.warning("归置失败 %s：%s", name, exc)
+
+
+def unlock_downloads(cfg: dict, result: SyncResult, dry_run: bool = False) -> None:
+    """把客户端下载目录（可选曲库）里的加密音频解锁成普通音频，放进曲库。
+
+    典型场景：平台不给原生音源（VIP 专属 / 版权限制）时，用户在官方客户端里
+    「下载」，拿到的是 .ncm / .qmc3 / .kgm 这类加密文件。这里在本地把它们还原
+    成普通 mp3/flac —— 全程不联网、不上传任何文件。
+    """
+    from . import unlock as unlock_mod
+    from .util import safe_name
+
+    conf = cfg.get("unlock") or {}
+    if not conf.get("enabled", True):
+        return
+    library = cfg.get("library_dir") or ""
+    if not library:
+        return
+
+    dirs = []
+    client_dir = cfg.get("client_download_dir") or ""
+    if client_dir and os.path.isdir(client_dir):
+        dirs.append(client_dir)
+    if conf.get("scan_library") and os.path.isdir(library):
+        dirs.append(library)
+    if not dirs:
+        return
+
+    for base_dir in dirs:
+        can, hints = unlock_mod.scan_encrypted(base_dir)
+        for path in hints:
+            name = os.path.basename(path)
+            if name not in result.unlock_hint:
+                result.unlock_hint.append(name)
+            log.info("加密格式暂不支持，已跳过：%s", name)
+        for path in can:
+            name = os.path.basename(path)
+            if dry_run:
+                log.info("[dry] 将解锁：%s", name)
+                continue
+            try:
+                done = unlock_mod.unlock(path, dest_dir=library)
+            except unlock_mod.UnlockError as exc:
+                result.unlock_failed.append(f"{name}（{exc}）")
+                log.warning("解锁失败 %s：%s", name, exc)
+                continue
+            except Exception as exc:              # noqa: BLE001 - 单个文件出错不影响其他
+                result.unlock_failed.append(f"{name}（{exc}）")
+                log.warning("解锁出错 %s：%s", name, exc)
+                continue
+
+            # 用文件内元数据把名字改成「歌手 - 歌名」，这样能直接对上歌单
+            final_path = done.path
+            if done.title and done.artists:
+                target = os.path.join(
+                    library,
+                    safe_name("%s - %s" % ("; ".join(done.artists), done.title))
+                    + os.path.splitext(done.path)[1],
+                )
+                if target != done.path and not os.path.exists(target):
+                    try:
+                        os.replace(done.path, target)
+                        final_path = target
+                    except OSError:
+                        pass
+
+            size = human_size(os.path.getsize(final_path))
+            result.unlocked.append(f"{os.path.basename(final_path)}  ({size})")
+            log.info("解锁：%s → %s（%s）", name, os.path.basename(final_path), size)
+
+            if conf.get("remove_source") and final_path != path:
+                try:
+                    os.remove(path)
+                except OSError as exc:
+                    log.debug("删除原加密文件失败 %s：%s", name, exc)
 
 
 def _download_one(adapter, track, cfg, result: SyncResult, dry_run: bool, fallbacks) -> None:
@@ -147,6 +226,7 @@ def run(cfg: dict, dry_run: bool = False) -> SyncResult:
         return result
 
     move_client_downloads(cfg, result, dry_run)
+    unlock_downloads(cfg, result, dry_run)
 
     key = platforms.resolve(cfg.get("platform", "netease"))
     result.platform = key
@@ -200,8 +280,15 @@ def run(cfg: dict, dry_run: bool = False) -> SyncResult:
 
     if result.grey:
         log.info("无版权/下架 %s 首：%s", len(result.grey), "；".join(result.grey[:10]))
+        if (cfg.get("unlock") or {}).get("enabled", True):
+            result.hint = ("有 %s 首平台不给原生音源。可以在官方客户端里「下载」这几首，"
+                           "下次运行会自动把下载到的加密文件解锁成普通音频。" % len(result.grey))
+            log.info(result.hint)
     if result.failed:
         log.warning("失败 %s 首：%s", len(result.failed), "；".join(result.failed[:10]))
-    log.info("== 本次结束：新增 %s 首，归置 %s 个，跳过 %s 首无版权 ==",
-             len(result.new), len(result.moved), len(result.grey))
+    if result.unlock_hint:
+        log.info("有 %s 个加密文件是暂不支持的格式（如 QQ 新版 mflac/mgg）：%s",
+                 len(result.unlock_hint), "；".join(result.unlock_hint[:5]))
+    log.info("== 本次结束：新增 %s 首，归置 %s 个，解锁 %s 个，跳过 %s 首无版权 ==",
+             len(result.new), len(result.moved), len(result.unlocked), len(result.grey))
     return result

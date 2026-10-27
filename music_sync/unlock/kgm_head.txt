@@ -1,0 +1,27 @@
+# -*- coding: utf-8 -*-
+"""酷狗加密音频（.kgm / .kgma / .vpr）解密。
+
+算法与掩码表来源（均为 MIT 许可，本项目为自行移植的 Python 实现）：
+- unlock-music  https://github.com/unlock-music/unlock-music
+- @jixun/kugou-crypto  https://git.unlock-music.dev/um/kugou-crypto
+
+文件结构：16 字节魔数（KGM 或 VPR）→ 0x10 处 u32 headerLen → 0x1C 处 16 字节密钥
+→ headerLen 之后是加密的音频流，逐字节按「掩码 ^ 密钥 ^ 密文」异或解出。
+"""
+from __future__ import annotations
+
+import os
+import struct
+from typing import BinaryIO
+
+from . import UnlockError, Unlocked, _out_path, _sniff_ext
+
+KGM_HEADER = bytes([0x7C, 0xD5, 0x32, 0xEB, 0x86, 0x02, 0x7F, 0x4B,
+                    0xA8, 0xAF, 0xA6, 0x8E, 0x0F, 0xFF, 0x99, 0x14])
+VPR_HEADER = bytes([0x05, 0x28, 0xBC, 0x96, 0xE9, 0xE4, 0x5A, 0x43,
+                    0x91, 0xAA, 0xBD, 0xD0, 0x7A, 0xF5, 0x36, 0x31])
+
+TABLE_SIZE = 16 * 17  # 272
+CHUNK = 1 << 20
+
+# 掩码表由 scripts/gen_kgm_tables.py 从上游 MIT 项目的 tables.js 一次性生成。

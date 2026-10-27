@@ -39,6 +39,7 @@ def _summary_lines(result: dict, timeout: int):
     moved = result.get("moved") or []
     grey = result.get("grey") or []
     failed = result.get("failed") or []
+    unlocked = result.get("unlocked") or []
     lines = []
     if result.get("error"):
         lines.append(("同步失败：" + result["error"][:40], True))
@@ -50,6 +51,8 @@ def _summary_lines(result: dict, timeout: int):
             lines.append(("  · …等 %d 首" % len(new), False))
     else:
         lines.append(("没有新增歌曲", True))
+    if unlocked:
+        lines.append(("解锁 %d 个加密音频" % len(unlocked), False))
     if moved:
         lines.append(("归置 %d 个文件到曲库" % len(moved), False))
     if grey:
@@ -190,10 +193,15 @@ def details(parent, result: dict) -> None:
     if result.get("error"):
         text.insert("end", "\n" + result["error"] + "\n", ("i",))
     section("新增下载", result.get("new") or [])
+    section("解锁并转换", result.get("unlocked") or [])
     section("归置到曲库", result.get("moved") or [])
     section("无版权/下架", result.get("grey") or [])
     section("下载失败", result.get("failed") or [])
-    if not any(result.get(k) for k in ("new", "grey", "failed", "error")):
+    section("解锁失败", result.get("unlock_failed") or [])
+    section("暂不支持的加密格式", result.get("unlock_hint") or [])
+    if result.get("hint"):
+        text.insert("end", "\n提示：%s\n" % result["hint"], ("i",))
+    if not any(result.get(k) for k in ("new", "unlocked", "grey", "failed", "error")):
         text.insert("end", "\n本次没有变化，一切已同步。\n", ("i",))
     text.config(state="disabled")
 

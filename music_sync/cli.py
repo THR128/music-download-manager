@@ -143,6 +143,61 @@ def cmd_login(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_unlock(args) -> int:
+    """把加密音频解锁成普通音频（.ncm / .qmc* / .kgm …）。"""
+    cfg = _load(args)
+    setup_logging(_log_path(cfg), verbose=args.verbose)
+    from . import unlock as unlock_mod
+    from .util import human_size
+
+    library = cfg.get("library_dir") or ""
+    targets = list(getattr(args, "dirs", []) or []) + list(getattr(args, "dirs_extra", []) or [])
+    if not targets:
+        client_dir = cfg.get("client_download_dir") or ""
+        if client_dir:
+            targets.append(client_dir)
+        if library:
+            targets.append(library)
+    targets = [p for p in targets if p]
+    if not targets:
+        print("❌ 没有可扫描的目录：请用 --dir 指定，或在配置里填好下载目录/曲库目录")
+        return 1
+
+    dest = args.dest or library or ""
+    if not dest:
+        print("❌ 没有输出目录：请用 --dest 指定，或在配置里填好曲库目录")
+        return 1
+
+    total_ok = total_fail = 0
+    for directory in targets:
+        if not os.path.isdir(directory):
+            print(f"跳过（目录不存在）：{directory}")
+            continue
+        can, hints = unlock_mod.scan_encrypted(directory, recursive=not args.no_recursive)
+        print(f"\n{directory}：可解锁 {len(can)} 个，只支持提示的 {len(hints)} 个")
+        for path in hints:
+            print(f"  · 暂不支持：{os.path.basename(path)}")
+        for path in can:
+            name = os.path.basename(path)
+            try:
+                done = unlock_mod.unlock(path, dest_dir=dest)
+            except unlock_mod.UnlockError as exc:
+                total_fail += 1
+                print(f"  ✗ {name}：{exc}")
+                continue
+            total_ok += 1
+            print(f"  ✓ {name} → {os.path.basename(done.path)}"
+                  f"（{done.fmt}，{human_size(os.path.getsize(done.path))}）")
+            if args.remove_source:
+                try:
+                    os.remove(path)
+                except OSError as exc:
+                    print(f"    （删除原文件失败：{exc}）")
+
+    print(f"\n共解锁 {total_ok} 个，失败 {total_fail} 个，输出目录：{dest}")
+    return 0 if total_fail == 0 else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="music-sync",
@@ -168,6 +223,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_set = sub.add_parser("settings", help="打开设置界面")
     p_set.set_defaults(func=cmd_settings)
+
+    p_unlock = sub.add_parser("unlock", help="把客户端下载的加密音频解锁成普通 mp3/flac")
+    p_unlock.add_argument("dirs", nargs="*", help="要扫描的目录（默认：配置里的下载目录 + 曲库目录）")
+    p_unlock.add_argument("--dir", dest="dirs_extra", action="append", default=[],
+                          help="额外扫描目录，可重复")
+    p_unlock.add_argument("--dest", help="输出目录（默认：配置里的曲库目录）")
+    p_unlock.add_argument("--remove-source", action="store_true", help="解锁成功后删掉原加密文件")
+    p_unlock.add_argument("--no-recursive", action="store_true", help="不递归子目录")
+    p_unlock.set_defaults(func=cmd_unlock)
 
     p_pl = sub.add_parser("platforms", help="列出平台与登录态")
     p_pl.set_defaults(func=cmd_platforms)

@@ -50,8 +50,10 @@ def main() -> int:
         proc.kill()
         print("没找到设置窗口")
         return 1
-    # 窗口贴到屏幕左上角，避免被别的窗口盖住
-    user32.SetWindowPos(hwnd, 0, 60, 60, 0, 0, 0x0001 | 0x0004)
+    # 窗口位置可用参数调整，默认放右上角，避开桌面左下角的宠物挂件
+    pos_x = int(sys.argv[1]) if len(sys.argv) > 1 else 1120
+    pos_y = int(sys.argv[2]) if len(sys.argv) > 2 else 40
+    user32.SetWindowPos(hwnd, 0, pos_x, pos_y, 0, 0, 0x0001 | 0x0004)
     user32.SetForegroundWindow(hwnd)
     time.sleep(1.5)
 

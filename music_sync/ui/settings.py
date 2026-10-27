@@ -38,9 +38,9 @@ log = get_logger()
 # ---------------------------------------------------------------- 常量
 
 WINDOW_TITLE = "音乐下载自动化管理 · 设置"
-WINDOW_SIZE = "760x840"
+WINDOW_SIZE = "760x952"
 APP_NAME = "音乐下载自动化管理"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 FONT_UI = ("Microsoft YaHei UI", 9)
 FONT_TITLE = ("Microsoft YaHei UI", 10, "bold")
 FONT_HINT = ("Microsoft YaHei UI", 8)
@@ -305,6 +305,10 @@ class SettingsApp:
         self.var_toast = tk.BooleanVar()
         self.var_timeout = tk.StringVar()
 
+        self.var_unlock = tk.BooleanVar()
+        self.var_unlock_scan = tk.BooleanVar()
+        self.var_unlock_remove = tk.BooleanVar()
+
         # 频率一变就立刻切换下面几行的显示，不用等用户点别处
         self.var_mode.trace_add("write", lambda *_: self._apply_schedule_visibility())
 
@@ -313,14 +317,51 @@ class SettingsApp:
         # 先 pack 底部按钮栏：pack 按顺序分配空间，按钮先占位才不会被上面挤掉
         self._build_buttons(self.root).pack(side="bottom", fill="x", padx=12, pady=(6, 10))
 
-        body = ttk.Frame(self.root, padding=(12, 8, 12, 4))
-        body.pack(fill="both", expand=True)
+        # 内容区放在画布里：屏幕太矮（1366x768 之类）时能滚，不至于有一半设置看不见
+        holder = ttk.Frame(self.root)
+        holder.pack(fill="both", expand=True)
+        self._canvas = tk.Canvas(holder, highlightthickness=0, borderwidth=0,
+                                 background=self._body_bg())
+        vsb = ttk.Scrollbar(holder, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self._canvas.pack(side="left", fill="both", expand=True)
+
+        body = ttk.Frame(self._canvas, padding=(12, 8, 12, 4))
         body.columnconfigure(0, weight=1)
+        self._body_id = self._canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>", lambda _e: self._sync_scrollregion())
+        self._canvas.bind("<Configure>", lambda e: self._canvas.itemconfigure(
+            self._body_id, width=e.width))
+        self._canvas.bind("<Enter>", lambda _e: self._canvas.bind_all("<MouseWheel>", self._on_wheel))
+        self._canvas.bind("<Leave>", lambda _e: self._canvas.unbind_all("<MouseWheel>"))
 
         self._build_basic(body).grid(row=0, column=0, sticky="ew")
         self._build_platform_playlists(body).grid(row=1, column=0, sticky="ew", pady=(6, 0))
         self._build_schedule(body).grid(row=2, column=0, sticky="ew", pady=(6, 0))
-        self._build_login(body).grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        self._build_unlock(body).grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        self._build_login(body).grid(row=4, column=0, sticky="ew", pady=(6, 0))
+
+    def _body_bg(self) -> str:
+        """取主题的背景色给画布，滚起来才看不出接缝。"""
+        try:
+            color = ttk.Style(self.root).lookup("TFrame", "background")
+        except tk.TclError:                                    # pragma: no cover
+            color = ""
+        return color or "#f0f0f0"
+
+    def _sync_scrollregion(self) -> None:
+        try:
+            self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+        except tk.TclError:                                    # pragma: no cover - 已销毁
+            pass
+
+    def _on_wheel(self, event) -> None:
+        step = -1 if getattr(event, "delta", 0) > 0 else 1
+        try:
+            self._canvas.yview_scroll(step * 2, "units")
+        except tk.TclError:                                    # pragma: no cover
+            pass
 
     def _build_basic(self, parent) -> ttk.LabelFrame:
         frame = ttk.LabelFrame(parent, text="基本设置", padding=(10, 3))
@@ -453,6 +494,44 @@ class SettingsApp:
         ttk.Label(notify, text="秒（5~300）").pack(side="left", padx=(4, 0))
         return frame
 
+    def _build_unlock(self, parent) -> ttk.LabelFrame:
+        frame = ttk.LabelFrame(parent, text="加密音频自动解锁", padding=(10, 3))
+        frame.columnconfigure(1, weight=1)
+
+        row = ttk.Frame(frame)
+        row.grid(row=0, column=0, columnspan=3, sticky="ew", pady=2)
+        ttk.Checkbutton(row, text="同步时自动把加密音频转成普通 mp3 / flac",
+                        variable=self.var_unlock).pack(side="left")
+        ttk.Button(row, text="说明", width=6, command=self._show_unlock_help).pack(
+            side="left", padx=(10, 0))
+
+        ttk.Checkbutton(frame, text="同时扫描曲库目录里已有的加密文件",
+                        variable=self.var_unlock_scan).grid(
+            row=1, column=0, sticky="w", pady=2)
+        ttk.Checkbutton(frame, text="解锁成功后删掉原加密文件",
+                        variable=self.var_unlock_remove).grid(
+            row=1, column=1, sticky="w", pady=2)
+        ttk.Label(frame,
+                  text="平台不给原生音源（VIP / 版权限制）时，在官方客户端里下载，工具会自动解锁成普通音频。"
+                       "全程在本机完成，不上传任何文件。",
+                  style="Hint.TLabel", wraplength=700, justify="left").grid(
+            row=2, column=0, columnspan=3, sticky="w", pady=(0, 2))
+        return frame
+
+    def _show_unlock_help(self) -> None:
+        messagebox.showinfo(
+            "加密音频自动解锁",
+            "有些歌平台不给直接下载（VIP 专属、版权限制），但你在官方客户端里点「下载」\n"
+            "仍然能拿到文件——只是它们是加密的（网易云 .ncm、QQ音乐 .qmc*、酷狗 .kgm）。\n\n"
+            "打开这个开关后，每次同步会先扫一遍「客户端下载目录」，把这些加密文件在\n"
+            "本机还原成普通的 mp3 / flac，按歌名歌手命名后放进曲库，再参与对账。\n\n"
+            "· 全程不联网、不上传任何文件，算法都在你自己的电脑上跑。\n"
+            "· 目前能解：网易云 .ncm、QQ音乐 .qmc0/.qmc2/.qmc3/.qmcflac/.qmcogg、"
+            "酷狗 .kgm/.kgma/.vpr。\n"
+            "· 暂时解不开（只会提示、不会乱改文件）：QQ音乐新版 .mflac/.mgg、酷狗 .kgg、酷我 .kwm。\n\n"
+            "只想手动转一批文件的话，命令行也可以：python -m music_sync unlock <目录>",
+            parent=self.root)
+
     def _build_login(self, parent) -> ttk.LabelFrame:
         frame = ttk.LabelFrame(parent, text="平台登录态", padding=(10, 3))
         frame.columnconfigure(1, weight=1)
@@ -524,6 +603,11 @@ class SettingsApp:
         notify = cfg.get("notify") or {}
         self.var_toast.set(bool(notify.get("toast", True)))
         self.var_timeout.set(str(notify.get("timeout") or 40))
+
+        unlock = cfg.get("unlock") or {}
+        self.var_unlock.set(bool(unlock.get("enabled", True)))
+        self.var_unlock_scan.set(bool(unlock.get("scan_library", False)))
+        self.var_unlock_remove.set(bool(unlock.get("remove_source", False)))
 
     # ------------------------------------------------------------ 交互
     def _current_platform_key(self) -> str:
@@ -814,6 +898,14 @@ class SettingsApp:
         notify = dict(new.get("notify") or {})
         notify.update({"toast": bool(self.var_toast.get()), "timeout": int(timeout_raw)})
         new["notify"] = notify
+
+        unlock = dict(new.get("unlock") or {})
+        unlock.update({
+            "enabled": bool(self.var_unlock.get()),
+            "scan_library": bool(self.var_unlock_scan.get()),
+            "remove_source": bool(self.var_unlock_remove.get()),
+        })
+        new["unlock"] = unlock
         return new
 
     def _save(self) -> None:
