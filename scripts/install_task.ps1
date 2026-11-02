@@ -40,6 +40,9 @@ param(
     # 手动指定解释器（默认自动找 python.exe 并换成同目录的 pythonw.exe）
     [string]$Python = "",
 
+    # 不挂「登录后补跑」触发器（默认会挂，机器关机错过定时后开机补一次）
+    [switch]$NoLogon,
+
     [switch]$Remove,
     [switch]$RunNow
 )
@@ -257,6 +260,20 @@ switch ($mode) {
     default { Fail "不认识的触发方式：$mode" }
 }
 
+# 另外挂一个「用户登录/开机后 1 分钟」的触发器：机器关着错过定时那次时，
+# 开机后能自动补跑（每周频率本身不变，只是多一次机会）。
+$logonXml = ""
+if (-not $NoLogon) {
+    $logonUser = Escape-Xml ("$env:USERDOMAIN\$env:USERNAME")
+    $logonXml = @"
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>$logonUser</UserId>
+      <Delay>PT1M</Delay>
+    </LogonTrigger>
+"@
+}
+
 $taskXml = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -266,6 +283,7 @@ $taskXml = @"
   </RegistrationInfo>
   <Triggers>
 $triggerXml
+$logonXml
   </Triggers>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
@@ -301,6 +319,7 @@ $tmpXml = Join-Path $env:TEMP ("musicsync-task-" + [guid]::NewGuid().ToString("N
 [System.IO.File]::WriteAllText($tmpXml, $taskXml, [System.Text.Encoding]::Unicode)
 
 Write-Info "任务名：$TaskName"
+$triggerText = if ($logonXml) { $triggerText + "（另外：用户登录后 1 分钟补跑一次）" } else { $triggerText }
 Write-Info "触发方式：$triggerText"
 Write-Info "执行命令：`"$Pythonw`" -m music_sync sync --gui --config `"$Config`""
 Write-Info "工作目录：$ProjectRoot"

@@ -71,6 +71,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_task.ps1 -Da
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_task.ps1 -Hours 24
 ```
 
+除了你选的频率，脚本默认还会挂一个**「用户登录后 1 分钟」**的触发器：电脑关着错过了定时那次，下次开机登录后会自动补跑一遍（重复跑不会重复下载，只补缺的）。不想要就加 `-NoLogon`。
+
 **macOS**：同一个命令换个脚本名，背后是 `launchd` 的 LaunchAgent（装在 `~/Library/LaunchAgents`，不用 sudo）：
 
 ```bash
